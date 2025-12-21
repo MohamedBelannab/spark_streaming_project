@@ -1,0 +1,11 @@
+timestamp,user_id,session_id,page_url,action
+2025-12-21 10:00:01,user_101,sess_A1,/home,view
+2025-12-21 10:00:05,user_101,sess_A1,/products/laptop,view
+2025-12-21 10:00:12,user_202,sess_B1,/home,view
+2025-12-21 10:00:15,user_101,sess_A1,/products/laptop,click
+2025-12-21 10:00:20,user_101,sess_A1,/cart,view
+2025-12-21 10:00:25,user_202,sess_B1,/products/phone,view
+2025-12-21 10:00:30,user_101,sess_A1,/checkout,purchase
+2025-12-21 10:00:35,user_303,sess_C1,/home,view
+2025-12-21 10:00:40,user_202,sess_B1,/cart,view
+2025-12-21 10:00:45,user_303,sess_C1,/search?q=camera,view
