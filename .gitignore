@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+venv/
+*.env
+
+# Jupyter
+.ipynb_checkpoints
+
+# Logs
+*.log

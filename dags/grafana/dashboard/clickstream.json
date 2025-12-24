@@ -1,0 +1,34 @@
+{
+  "dashboard": {
+    "title": "Clickstream Analytics",
+    "panels": [
+      {
+        "title": "Events par minute",
+        "type": "stat",
+        "datasource": "Redis",
+        "targets": [{
+          "query": "GET global:events:total",
+          "type": "command"
+        }]
+      },
+      {
+        "title": "Revenue total",
+        "type": "stat",
+        "datasource": "Redis",
+        "targets": [{
+          "query": "GET global:revenue:total",
+          "type": "command"
+        }]
+      },
+      {
+        "title": "Pages les plus visitées",
+        "type": "table",
+        "datasource": "Redis",
+        "targets": [{
+          "query": "ZREVRANGE leaderboard:pages:views 0 9 WITHSCORES",
+          "type": "command"
+        }]
+      }
+    ]
+  }
+}

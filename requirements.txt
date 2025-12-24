@@ -1,0 +1,18 @@
+# Kafka
+kafka-python
+confluent-kafka
+
+# Data generation
+faker
+pandas
+
+# Redis
+redis
+
+# Spark (pour les jobs batch)
+pyspark
+
+# Airflow (si vous voulez exécuter des DAGs localement)
+apache-airflow
+apache-airflow-providers-Redis
+
