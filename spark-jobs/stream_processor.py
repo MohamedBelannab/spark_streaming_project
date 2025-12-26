@@ -67,10 +67,13 @@ def write_to_redis(batch_df, batch_id):
         )
         
         batch_time = datetime.now().strftime("%Y%m%d%H%M%S")
-        
+
+        # Collecter toutes les donnees UNE SEULE FOIS pour eviter les erreurs
+        all_rows = batch_df.collect()
+
         # 1. Statistiques par page (aggreger les donnees deja agregees par fenetre)
         page_data = {}
-        for row in batch_df.collect():
+        for row in all_rows:
             page = row['page']
             if page not in page_data:
                 page_data[page] = {
@@ -121,7 +124,7 @@ def write_to_redis(batch_df, batch_id):
         
         # 4. Statistiques par action (depuis les donnees deja agregees)
         action_stats = {}
-        for row in batch_df.collect():
+        for row in all_rows:
             action = row['action']
             if action not in action_stats:
                 action_stats[action] = 0
@@ -150,8 +153,8 @@ def write_to_redis(batch_df, batch_id):
         r.ltrim("recent:events", 0, 99)  # Garder 100 derniers
         
         # 6. Métriques globales
-        total_events = batch_df.count()
-        total_revenue = batch_df.select(sum("revenue")).collect()[0][0] or 0
+        total_events = len(all_rows)
+        total_revenue = sum([float(row['revenue'] or 0) for row in all_rows])
         
         r.incrby("global:events:total", total_events)
         r.incrbyfloat("global:revenue:total", float(total_revenue))
@@ -160,7 +163,7 @@ def write_to_redis(batch_df, batch_id):
         
         # 7. Statistiques géographiques (depuis les donnees deja agregees)
         geo_stats = {}
-        for row in batch_df.collect():
+        for row in all_rows:
             location = row['location']
             if location:
                 if location not in geo_stats:
@@ -172,7 +175,7 @@ def write_to_redis(batch_df, batch_id):
 
         # 8. Statistiques appareils (depuis les donnees deja agregees)
         device_stats = {}
-        for row in batch_df.collect():
+        for row in all_rows:
             device = row['device_type']
             if device:
                 if device not in device_stats:
