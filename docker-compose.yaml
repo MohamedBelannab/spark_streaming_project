@@ -67,6 +67,8 @@ services:
       - "7077:7077" # Spark Master Submit
     environment:
       - INIT_DAEMON_STEP=setup_spark
+    volumes:
+      - ./spark-jobs:/opt/spark-apps
     env_file:
       - ./hadoop.env
     networks:
@@ -81,6 +83,8 @@ services:
       - "8083:8081"
     environment:
       - "SPARK_MASTER=spark://spark-master:7077"
+    volumes:
+      - ./spark-jobs:/opt/spark-apps
     env_file:
       - ./hadoop.env
     networks:

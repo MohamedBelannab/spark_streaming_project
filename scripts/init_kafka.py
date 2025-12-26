@@ -13,13 +13,13 @@ def create_kafka_topic():
     commands = [
         # Attendre que Kafka soit prêt
         ["docker", "exec", "kafka", "bash", "-c", 
-         "for i in {1..30}; do kafka-topics --bootstrap-server localhost:9092 --list && break || sleep 2; done"],
+         "for i in {1..30}; do kafka-topics --bootstrap-server kafka:9092 --list && break || sleep 2; done"],
         
         # Créer le topic
         ["docker", "exec", "kafka", "kafka-topics",
          "--create",
          "--topic", "clickstream",
-         "--bootstrap-server", "localhost:9092",
+         "--bootstrap-server", "kafka:9092",
          "--partitions", "3",
          "--replication-factor", "1",
          "--config", "retention.ms=604800000",  # 7 jours
@@ -42,7 +42,7 @@ def create_kafka_topic():
     check_cmd = ["docker", "exec", "kafka", "kafka-topics",
                  "--describe",
                  "--topic", "clickstream",
-                 "--bootstrap-server", "localhost:9092"]
+                 "--bootstrap-server", "kafka:9092"]
     
     result = subprocess.run(check_cmd, capture_output=True, text=True)
     if result.returncode == 0:
