@@ -62,11 +62,11 @@ def load_existing_products():
     """Charger les product_ids existants du CSV"""
     products = []
     try:
-        with open('../data/clickstream_events.csv', 'r') as f:
+        with open('data/clickstream_events.csv', 'r') as f:
             reader = csv.DictReader(f)
             for row in reader:
                 if row['product_id'] and row['product_id'] != '':
-                    products.append(int(row['product_id']))
+                    products.append((row['product_id']))
     except FileNotFoundError:
         pass
     
@@ -130,7 +130,7 @@ def create_clickstream_event():
     
     return event
 
-def read_from_csv_and_send(producer, csv_path='../data/clickstream_events.csv'):
+def read_from_csv_and_send(producer, csv_path='data/clickstream_events.csv'):
     """Lire les données existantes du CSV et les envoyer à Kafka"""
     try:
         with open(csv_path, 'r') as f:
@@ -140,11 +140,11 @@ def read_from_csv_and_send(producer, csv_path='../data/clickstream_events.csv'):
             for row in reader:
                 # Convertir les types
                 event = {
-                    "user_id": int(row['user_id']),
+                    "user_id": row['user_id'],
                     "timestamp": row['timestamp'],
                     "page": row['page'],
                     "action": row['action'],
-                    "product_id": int(row['product_id']) if row['product_id'] else None,
+                    "product_id": row['product_id'] if row['product_id'] else None,
                     "product_category": row['product_category'] if row['product_category'] else None,
                     "session_id": row['session_id'],
                     "ip_address": row['ip_address'],

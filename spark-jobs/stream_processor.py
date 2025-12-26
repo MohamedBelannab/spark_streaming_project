@@ -1,6 +1,7 @@
+# -*- coding: utf-8 -*-
 #!/usr/bin/env python3
 """
-Spark Structured Streaming pour clickstream - Schéma du dataset
+Spark Structured Streaming pour clickstream - Python 3.5 compatible
 """
 
 from pyspark.sql import SparkSession
@@ -10,7 +11,7 @@ from pyspark.sql.window import Window
 import redis
 import json
 from datetime import datetime
-import os
+import time
 
 # Configuration
 KAFKA_BROKER = "kafka:29092"
@@ -39,7 +40,7 @@ def get_clickstream_schema():
     """Définir le schéma selon le dataset"""
     return StructType([
         StructField("user_id", IntegerType(), True),
-        StructField("timestamp", TimestampType(), True),
+        StructField("timestamp", StringType(), True),  # String first, convert later
         StructField("page", StringType(), True),
         StructField("action", StringType(), True),
         StructField("product_id", IntegerType(), True),
@@ -55,7 +56,7 @@ def get_clickstream_schema():
     ])
 
 def write_to_redis(batch_df, batch_id):
-    """Écrire les métriques temps réel dans Redis"""
+    """Écrire les métriques temps réel dans Redis - Python 3.5 compatible"""
     try:
         r = redis.Redis(
             host=REDIS_HOST, 
@@ -67,17 +68,37 @@ def write_to_redis(batch_df, batch_id):
         
         batch_time = datetime.now().strftime("%Y%m%d%H%M%S")
         
-        # 1. Statistiques par page
-        page_stats = batch_df.groupBy("page").agg(
-            count("*").alias("views"),
-            countDistinct("user_id").alias("unique_users"),
-            avg("duration_seconds").alias("avg_duration"),
-            sum(when(col("action") == "purchase", 1).otherwise(0)).alias("purchases"),
-            sum(col("purchase_amount")).alias("revenue")
-        ).collect()
+        # 1. Statistiques par page (aggreger les donnees deja agregees par fenetre)
+        page_data = {}
+        for row in batch_df.collect():
+            page = row['page']
+            if page not in page_data:
+                page_data[page] = {
+                    'views': 0,
+                    'unique_users': 0,
+                    'avg_duration': [],
+                    'purchases': 0,
+                    'revenue': 0
+                }
+            page_data[page]['views'] += int(row['event_count'] or 0)
+            page_data[page]['unique_users'] += int(row['unique_users'] or 0)
+            page_data[page]['avg_duration'].append(float(row['avg_duration'] or 0))
+            page_data[page]['revenue'] += float(row['revenue'] or 0)
+
+        page_stats = []
+        for page, stats in page_data.items():
+            avg_dur = sum(stats['avg_duration']) / len(stats['avg_duration']) if stats['avg_duration'] else 0
+            page_stats.append({
+                'page': page,
+                'views': stats['views'],
+                'unique_users': stats['unique_users'],
+                'avg_duration': avg_dur,
+                'purchases': 0,  # Non disponible dans les donnees agregees
+                'revenue': stats['revenue']
+            })
         
         for row in page_stats:
-            page_key = f"page:stats:{row['page']}"
+            page_key = "page:stats:{}".format(row['page'])
             r.hset(page_key, mapping={
                 "views": int(row['views'] or 0),
                 "unique_users": int(row['unique_users'] or 0),
@@ -92,39 +113,37 @@ def write_to_redis(batch_df, batch_id):
         for row in page_stats:
             r.zincrby("leaderboard:pages:views", row['views'] or 0, row['page'])
             r.zincrby("leaderboard:pages:revenue", row['revenue'] or 0, row['page'])
+
+        # 3. Statistiques globales (utiliser unique_users agrege au lieu de user_id)
+        total_unique_users = sum([int(row['unique_users'] or 0) for row in page_stats])
+        r.set("global:unique_users:current", total_unique_users)
+        r.expire("global:unique_users:current", 300)  # 5 minutes
         
-        # 3. Utilisateurs actifs
-        active_users = batch_df.select("user_id").distinct().collect()
-        for row in active_users:
-            user_id = str(row['user_id'])
-            r.sadd("active:users:current", user_id)
-            r.zadd("active:users:history", {user_id: int(time.time())})
-        
-        r.expire("active:users:current", 300)  # 5 minutes
-        r.zremrangebyscore("active:users:history", 0, int(time.time()) - 3600)  # Garder 1h
-        
-        # 4. Statistiques par action
-        action_stats = batch_df.groupBy("action").agg(
-            count("*").alias("count")
-        ).collect()
-        
-        for row in action_stats:
-            action_key = f"action:stats:{row['action']}"
-            r.hincrby(action_key, "count", int(row['count'] or 0))
+        # 4. Statistiques par action (depuis les donnees deja agregees)
+        action_stats = {}
+        for row in batch_df.collect():
+            action = row['action']
+            if action not in action_stats:
+                action_stats[action] = 0
+            action_stats[action] += int(row['event_count'] or 0)
+
+        for action, count in action_stats.items():
+            action_key = "action:stats:{}".format(action)
+            r.hincrby(action_key, "count", count)
             r.expire(action_key, 3600)
         
-        # 5. Derniers événements (pour monitoring)
+        # 5. Derniers événements (pour monitoring) - utiliser colonnes disponibles
         recent_events = batch_df.select(
-            "user_id", "page", "action", "timestamp", "purchase_amount"
-        ).orderBy(desc("timestamp")).limit(10).collect()
+            "page", "action", "window", "event_count", "revenue"
+        ).orderBy(desc("window")).limit(10).collect()
         
         for event in recent_events:
             event_data = {
-                "user_id": event['user_id'],
                 "page": event['page'],
                 "action": event['action'],
-                "timestamp": event['timestamp'].isoformat() if event['timestamp'] else "",
-                "purchase_amount": event['purchase_amount'] or 0
+                "window": str(event['window']),
+                "event_count": int(event['event_count'] or 0),
+                "revenue": float(event['revenue'] or 0)
             }
             r.lpush("recent:events", json.dumps(event_data))
         
@@ -132,43 +151,45 @@ def write_to_redis(batch_df, batch_id):
         
         # 6. Métriques globales
         total_events = batch_df.count()
-        total_revenue = batch_df.select(sum("purchase_amount")).collect()[0][0] or 0
-        total_users = len(active_users)
+        total_revenue = batch_df.select(sum("revenue")).collect()[0][0] or 0
         
         r.incrby("global:events:total", total_events)
         r.incrbyfloat("global:revenue:total", float(total_revenue))
         r.set("global:last_batch_time", batch_time)
         r.set("global:last_batch_id", batch_id)
         
-        # 7. Statistiques géographiques
-        geo_stats = batch_df.groupBy("location").agg(
-            count("*").alias("events")
-        ).collect()
+        # 7. Statistiques géographiques (depuis les donnees deja agregees)
+        geo_stats = {}
+        for row in batch_df.collect():
+            location = row['location']
+            if location:
+                if location not in geo_stats:
+                    geo_stats[location] = 0
+                geo_stats[location] += int(row['event_count'] or 0)
+
+        for location, events in geo_stats.items():
+            r.zincrby("geo:activity", events, location)
+
+        # 8. Statistiques appareils (depuis les donnees deja agregees)
+        device_stats = {}
+        for row in batch_df.collect():
+            device = row['device_type']
+            if device:
+                if device not in device_stats:
+                    device_stats[device] = 0
+                device_stats[device] += int(row['event_count'] or 0)
+
+        for device, events in device_stats.items():
+            r.zincrby("device:usage", events, device)
         
-        for row in geo_stats:
-            if row['location']:
-                r.zincrby("geo:activity", row['events'] or 0, row['location'])
-        
-        # 8. Statistiques appareils
-        device_stats = batch_df.groupBy("device_type").agg(
-            count("*").alias("events")
-        ).collect()
-        
-        for row in device_stats:
-            if row['device_type']:
-                r.zincrby("device:usage", row['events'] or 0, row['device_type'])
-        
-        print(f"✅ Batch {batch_id} -> Redis: {total_events} events, ${total_revenue:.2f} revenue")
-        
+        print("✅ Batch {} -> Redis: {} events, ${:.2f} revenue".format(batch_id, total_events, total_revenue))
+
     except Exception as e:
-        print(f"⚠️  Erreur Redis batch {batch_id}: {str(e)[:100]}")
+        print("❌ Erreur Redis batch {}: {}".format(batch_id, str(e)[:100]))
 
 def process_real_time_metrics(df):
     """Traiter les métriques en temps réel"""
-    # Fenêtre glissante de 5 minutes, mise à jour chaque minute
-    window_spec = Window().orderBy("timestamp").rangeBetween(-300, 0)
-    
-    # Métriques en temps réel
+    # Métriques en temps réel - utiliser approx_count_distinct pour les streams
     realtime_metrics = df \
         .withWatermark("timestamp", "1 minute") \
         .groupBy(
@@ -180,16 +201,16 @@ def process_real_time_metrics(df):
         ) \
         .agg(
             count("*").alias("event_count"),
-            countDistinct("user_id").alias("unique_users"),
+            approx_count_distinct("user_id").alias("unique_users"),
             sum(when(col("action") == "purchase", col("purchase_amount")).otherwise(0)).alias("revenue"),
             avg("duration_seconds").alias("avg_duration")
         ) \
-        .withColumn("revenue_per_user", 
+        .withColumn("revenue_per_user",
                    col("revenue") / when(col("unique_users") == 0, 1).otherwise(col("unique_users"))) \
         .withColumn("conversion_rate",
-                   when(col("event_count") > 0, 
+                   when(col("event_count") > 0,
                         (col("revenue") / col("event_count")) * 100).otherwise(0))
-    
+
     return realtime_metrics
 
 def process_session_analytics(df):
@@ -227,10 +248,10 @@ def main():
     print("=" * 60)
     print("🚀 SPARK STREAMING - CLICKSTREAM PROCESSOR")
     print("=" * 60)
-    print(f"📡 Kafka: {KAFKA_BROKER}")
-    print(f"📝 Topic: {TOPIC_NAME}")
-    print(f"💾 HDFS: {HDFS_PATH}")
-    print(f"🔴 Redis: {REDIS_HOST}:{REDIS_PORT}")
+    print("📡 Kafka: {}".format(KAFKA_BROKER))
+    print("📝 Topic: {}".format(TOPIC_NAME))
+    print("🗄️  HDFS: {}".format(HDFS_PATH))
+    print("⚡ Redis: {}:{}".format(REDIS_HOST, REDIS_PORT))
     print("=" * 60)
     
     # Initialiser Spark
@@ -239,7 +260,7 @@ def main():
     
     try:
         # 1. Lire depuis Kafka
-        print("📥 Lecture du stream Kafka...")
+        print("📡 Lecture du stream Kafka...")
         df = spark.readStream \
             .format("kafka") \
             .option("kafka.bootstrap.servers", KAFKA_BROKER) \
@@ -254,9 +275,14 @@ def main():
             from_json(col("value").cast("string"), schema).alias("data")
         ).select("data.*")
         
-        # 3. Ajouter des colonnes de temps
+        # 3. Convertir timestamp string to timestamp
+        parsed_df = parsed_df.withColumn(
+            "timestamp", 
+            to_timestamp(col("timestamp"), "yyyy-MM-dd HH:mm:ss")
+        )
+        
+        # 4. Ajouter des colonnes de temps
         enriched_df = parsed_df \
-            .withColumn("timestamp", to_timestamp(col("timestamp"))) \
             .withColumn("date", to_date(col("timestamp"))) \
             .withColumn("hour", hour(col("timestamp"))) \
             .withColumn("minute", minute(col("timestamp"))) \
@@ -264,102 +290,95 @@ def main():
             .withColumn("is_weekend", when(col("day_of_week").isin([1, 7]), 1).otherwise(0)) \
             .withWatermark("timestamp", "10 minutes")
         
-        # 4. Traiter les métriques en temps réel
+        # 5. Traiter les métriques en temps réel
+        print("📊 Traitement des métriques en temps réel...")
         realtime_metrics = process_real_time_metrics(enriched_df)
         
-        # 5. Stream 1: Écrire les métriques temps réel dans Redis
-        print("🔥 Démarrage du stream Redis...")
+        # 6. Stream 1: Écrire les métriques temps réel dans Redis
+        print("⚡ Démarrage du stream Redis...")
         redis_stream = realtime_metrics \
             .select("window", "page", "action", "location", "device_type",
-                    "event_count", "unique_users", "revenue", 
+                    "event_count", "unique_users", "revenue",
                     "avg_duration", "revenue_per_user", "conversion_rate") \
             .writeStream \
             .foreachBatch(write_to_redis) \
             .outputMode("update") \
             .trigger(processingTime="1 minute") \
-            .option("checkpointLocation", f"{CHECKPOINT_PATH}/redis") \
+            .option("checkpointLocation", "{}/redis".format(CHECKPOINT_PATH)) \
             .start()
-        
-        # 6. Stream 2: Écrire les données brutes dans HDFS
-        print("💾 Démarrage du stream HDFS (raw data)...")
+
+        # 7. Stream 2: Écrire les données brutes dans HDFS
+        print("🗄️  Démarrage du stream HDFS (raw data)...")
         hdfs_raw_stream = enriched_df \
             .writeStream \
             .format("parquet") \
-            .option("path", f"{HDFS_PATH}/raw") \
-            .option("checkpointLocation", f"{CHECKPOINT_PATH}/hdfs_raw") \
+            .option("path", "{}/raw".format(HDFS_PATH)) \
+            .option("checkpointLocation", "{}/hdfs_raw".format(CHECKPOINT_PATH)) \
             .partitionBy("date", "hour") \
+            .outputMode("append") \
             .trigger(processingTime="5 minutes") \
             .start()
-        
-        # 7. Stream 3: Agrégations quotidiennes
+
+        # 8. Stream 3: Agrégations horaires (append mode)
         print("📊 Démarrage du stream HDFS (aggregations)...")
         daily_aggregations = enriched_df \
+            .withWatermark("timestamp", "10 minutes") \
             .groupBy(
-                window(col("timestamp"), "1 day"),
+                window(col("timestamp"), "1 hour"),
+                col("date"),
                 col("page"),
                 col("action"),
-                col("product_category"),
-                col("location"),
                 col("device_type")
             ) \
             .agg(
                 count("*").alias("total_events"),
-                countDistinct("user_id").alias("unique_users"),
-                avg("duration_seconds").alias("avg_duration"),
-                sum(col("purchase_amount")).alias("total_revenue"),
-                count(when(col("action") == "purchase", 1)).alias("purchase_count")
+                approx_count_distinct("user_id").alias("unique_users"),
+                avg("duration_seconds").alias("avg_duration")
             ) \
-            .withColumn("date", col("window.start")) \
             .writeStream \
             .format("parquet") \
-            .option("path", f"{HDFS_PATH}/aggregations/daily") \
-            .option("checkpointLocation", f"{CHECKPOINT_PATH}/daily_agg") \
-            .outputMode("complete") \
-            .trigger(processingTime="15 minutes") \
-            .start()
-        
-        # 8. Stream 4: Analyse des sessions
-        print("👥 Démarrage du stream HDFS (sessions)...")
-        sessions_df = process_session_analytics(enriched_df)
-        
-        sessions_stream = sessions_df \
-            .withColumn("date", to_date(col("session_start"))) \
-            .writeStream \
-            .format("parquet") \
-            .option("path", f"{HDFS_PATH}/sessions") \
-            .option("checkpointLocation", f"{CHECKPOINT_PATH}/sessions") \
-            .partitionBy("date") \
+            .option("path", "{}/aggregations/hourly".format(HDFS_PATH)) \
+            .option("checkpointLocation", "{}/hourly_agg".format(CHECKPOINT_PATH)) \
+            .outputMode("append") \
             .trigger(processingTime="10 minutes") \
             .start()
         
         # Afficher l'état des streams
-        streams = [redis_stream, hdfs_raw_stream, daily_aggregations, sessions_stream]
-        stream_names = ["Redis Metrics", "HDFS Raw", "Daily Aggregations", "Sessions"]
+        streams = [redis_stream, hdfs_raw_stream, daily_aggregations]
+        stream_names = ["Redis Metrics", "HDFS Raw", "Daily Aggregations"]
         
         print("\n" + "=" * 60)
-        print("📈 STREAMS ACTIFS:")
+        print("✅ STREAMS ACTIFS:")
         for name, stream in zip(stream_names, streams):
-            status = "✅ ACTIF" if stream.isActive else "❌ INACTIF"
-            print(f"  {name}: {status}")
+            status = "🟢 ACTIF" if stream.isActive else "🔴 INACTIF"
+            print("  • {}: {}".format(name, status))
         print("=" * 60)
         
         # Attendre la terminaison
         spark.streams.awaitAnyTermination()
         
     except KeyboardInterrupt:
-        print("\n\n🛑 Arrêt demandé par l'utilisateur...")
+        print("\n🛑 Arrêt demandé par l'utilisateur...")
     except Exception as e:
-        print(f"\n❌ Erreur: {e}")
+        print("\n❌ Erreur: {}".format(e))
         import traceback
         traceback.print_exc()
     finally:
         # Arrêter tous les streams
         for stream in spark.streams.active:
-            print(f"Arrêt de {stream.name}...")
+            print("🛑 Arrêt de {}...".format(stream.name))
             stream.stop()
-        
+
         spark.stop()
-        print("\n✅ Session Spark arrêtée proprement")
+        print("\n✅ Session Spark arrêtée")
 
 if __name__ == "__main__":
     main()
+
+"""
+docker exec spark-master /spark/bin/spark-submit \
+  --master spark://spark-master:7077 \
+  --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.0.0 \
+  /opt/spark-apps/stream_processor.py
+
+"""
