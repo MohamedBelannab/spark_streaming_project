@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 Spark Structured Streaming pour clickstream - Schéma du dataset
 """
@@ -7,13 +8,15 @@ from pyspark.sql import SparkSession
 from pyspark.sql.functions import *
 from pyspark.sql.types import *
 from pyspark.sql.window import Window
+from pyspark.sql.functions import approx_count_distinct
 import redis
 import json
 from datetime import datetime
 import os
+import time
 
 # Configuration
-KAFKA_BROKER = "kafka:29092"
+KAFKA_BROKER = "kafka:9092"
 TOPIC_NAME = "clickstream"
 REDIS_HOST = "redis"
 REDIS_PORT = 6379
@@ -70,12 +73,12 @@ def write_to_redis(batch_df, batch_id):
         # 1. Statistiques par page
         page_stats = batch_df.groupBy("page").agg(
             count("*").alias("views"),
-            countDistinct("user_id").alias("unique_users"),
+            approx_count_distinct("user_id").alias("unique_users"),  # <-- correction
             avg("duration_seconds").alias("avg_duration"),
             sum(when(col("action") == "purchase", 1).otherwise(0)).alias("purchases"),
             sum(col("purchase_amount")).alias("revenue")
         ).collect()
-        
+
         for row in page_stats:
             page_key = f"page:stats:{row['page']}"
             r.hset(page_key, mapping={
@@ -87,7 +90,7 @@ def write_to_redis(batch_df, batch_id):
                 "last_updated": batch_time
             })
             r.expire(page_key, 7200)  # 2 heures
-        
+
         # 2. Top pages (leaderboard)
         for row in page_stats:
             r.zincrby("leaderboard:pages:views", row['views'] or 0, row['page'])
@@ -165,9 +168,6 @@ def write_to_redis(batch_df, batch_id):
 
 def process_real_time_metrics(df):
     """Traiter les métriques en temps réel"""
-    # Fenêtre glissante de 5 minutes, mise à jour chaque minute
-    window_spec = Window().orderBy("timestamp").rangeBetween(-300, 0)
-    
     # Métriques en temps réel
     realtime_metrics = df \
         .withWatermark("timestamp", "1 minute") \
@@ -180,7 +180,7 @@ def process_real_time_metrics(df):
         ) \
         .agg(
             count("*").alias("event_count"),
-            countDistinct("user_id").alias("unique_users"),
+            approx_count_distinct("user_id").alias("unique_users"),  # <-- correction
             sum(when(col("action") == "purchase", col("purchase_amount")).otherwise(0)).alias("revenue"),
             avg("duration_seconds").alias("avg_duration")
         ) \
@@ -194,10 +194,13 @@ def process_real_time_metrics(df):
 
 def process_session_analytics(df):
     """Analyser les sessions utilisateur"""
+    # Appliquer un watermark AVANT les agrégations
+    df_with_watermark = df.withWatermark("timestamp", "30 minutes")
+    
     # Identifier les sessions (30 minutes d'inactivité)
     window_spec = Window.partitionBy("user_id", "session_id").orderBy("timestamp")
     
-    sessions = df \
+    sessions = df_with_watermark \
         .withColumn("prev_timestamp", lag("timestamp", 1).over(window_spec)) \
         .withColumn("time_diff", 
                    unix_timestamp(col("timestamp")) - unix_timestamp(col("prev_timestamp"))) \
@@ -275,7 +278,7 @@ def main():
                     "avg_duration", "revenue_per_user", "conversion_rate") \
             .writeStream \
             .foreachBatch(write_to_redis) \
-            .outputMode("update") \
+            .outputMode("complete") \
             .trigger(processingTime="1 minute") \
             .option("checkpointLocation", f"{CHECKPOINT_PATH}/redis") \
             .start()
@@ -304,7 +307,7 @@ def main():
             ) \
             .agg(
                 count("*").alias("total_events"),
-                countDistinct("user_id").alias("unique_users"),
+                approx_count_distinct("user_id").alias("unique_users"),  # <-- correction
                 avg("duration_seconds").alias("avg_duration"),
                 sum(col("purchase_amount")).alias("total_revenue"),
                 count(when(col("action") == "purchase", 1)).alias("purchase_count")
@@ -363,3 +366,15 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+""" 
+docker exec spark-master \
+  /spark/bin/spark-submit \
+  --master spark://spark-master:7077 \
+  --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.0.0 \
+  --conf "spark.executor.memory=1g" \
+  --conf "spark.driver.memory=1g" \
+  /opt/spark-apps/stream_processor.py
+
+""" 

@@ -67,6 +67,10 @@ services:
       - "7077:7077" # Spark Master Submit
     environment:
       - INIT_DAEMON_STEP=setup_spark
+      - PYSPARK_PYTHON=python3
+      - PYSPARK_DRIVER_PYTHON=python3
+    volumes:
+      - ./spark-jobs:/opt/spark-apps
     env_file:
       - ./hadoop.env
     networks:
@@ -81,6 +85,10 @@ services:
       - "8083:8081"
     environment:
       - "SPARK_MASTER=spark://spark-master:7077"
+      - PYSPARK_PYTHON=python3
+      - PYSPARK_DRIVER_PYTHON=python3
+    volumes:
+      - ./spark-jobs:/opt/spark-apps
     env_file:
       - ./hadoop.env
     networks:
