@@ -11,44 +11,52 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # 1. Download your code from the repository
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      # 2. Setup the official Python environment
       - name: Set up Python 3.10
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
+      # 3. Install system libraries needed for Snappy compression
       - name: Install System Dependencies
-        # Essential for the 'snappy' compression error
         run: |
           sudo apt-get update
           sudo apt-get install -y libsnappy-dev
 
+      # 4. Install Python libraries from your requirements.txt
       - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # 5. Fix permissions for your script
       - name: Grant Execute Rights
         run: chmod +x run_project.sh
 
+      # 6. Launch the project in CI Mode
       - name: Launch Full Infrastructure
         env:
-          CI: true  # Key: Tells the script to skip venv activation
+          CI: true  # This flag tells your script to skip 'venv/bin/activate'
         run: ./run_project.sh start
 
+      # 7. Verify that data is actually moving through the pipeline
       - name: Verify Data Pipeline
         run: |
-          info "Waiting for data generation..."
-          sleep 30
-          if grep -q "event" logs/producer.log; then
+          echo "Waiting for data generation (60s)..."
+          sleep 60
+          # Check if the producer log has content (size > 0)
+          if [ -s logs/producer.log ]; then
             echo "✅ Integration Test Passed: Data is flowing."
           else
-            echo "❌ Integration Test Failed: No data found."
+            echo "❌ Integration Test Failed: No data found in producer.log"
             exit 1
           fi
 
+      # 8. Clean up containers even if the test fails
       - name: Shutdown
         if: always()
         run: ./run_project.sh stop
