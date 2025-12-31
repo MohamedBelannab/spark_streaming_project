@@ -1,4 +1,4 @@
-name: Clickstream Real-Time CI
+name: Clickstream Pipeline CI
 
 on:
   push:
@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      - name: Checkout Code
         uses: actions/checkout@v4
 
       - name: Set up Python 3.10
@@ -19,29 +19,36 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install Python dependencies
+      - name: Install System Dependencies
+        # Essential for the 'snappy' compression error
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsnappy-dev
+
+      - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Grant execution rights to script
+      - name: Grant Execute Rights
         run: chmod +x run_project.sh
 
       - name: Launch Full Infrastructure
-        # This will run your Docker containers and start the producer/spark
+        env:
+          CI: true  # Key: Tells the script to skip venv activation
         run: ./run_project.sh start
 
-      - name: Wait and Verify Data Flow
-        # We wait a bit for Spark to process, then check if logs are growing
+      - name: Verify Data Pipeline
         run: |
-          sleep 60
-          if [ -s logs/producer.log ]; then
-            echo "✅ Producer is active and generating data"
+          info "Waiting for data generation..."
+          sleep 30
+          if grep -q "event" logs/producer.log; then
+            echo "✅ Integration Test Passed: Data is flowing."
           else
-            echo "❌ Producer log is empty"
+            echo "❌ Integration Test Failed: No data found."
             exit 1
           fi
 
-      - name: Cleanup
+      - name: Shutdown
         if: always()
         run: ./run_project.sh stop

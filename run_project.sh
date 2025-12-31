@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==============================================================================
-# Script: run_project.sh (Version 2025.5 - Auto-Venv Support)
+# Script: run_project.sh (Version 2025.6 - CI/CD Optimized)
 # ==============================================================================
 
 set -e 
@@ -12,50 +12,51 @@ PID_SPARK="$LOG_DIR/spark.pid"
 
 BLUE='\033[0;34m'
 GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
 NC='\033[0m'
 
 info()    { echo -e "${BLUE}ℹ️  $1${NC}"; }
 success() { echo -e "${GREEN}✅ $1${NC}"; }
+error()   { echo -e "${RED}❌ $1${NC}"; }
 
-setup_python_env() {
-    if [ ! -d "venv" ]; then
-        info "Creating virtual environment and installing requirements..."
-        python3 -m venv venv
-        source venv/bin/activate
-        pip install --upgrade pip
-        if [ -f "requirements.txt" ]; then
+# --- Environment Management ---
+setup_env() {
+    # If running in GitHub Actions (CI=true), dependencies are handled by the YAML
+    if [ "$CI" == "true" ]; then
+        info "CI Mode detected: Using GitHub managed environment."
+    else
+        # Local Mode: Use or create venv
+        if [ ! -d "venv" ]; then
+            info "Local Mode: Creating virtual environment..."
+            python3 -m venv venv
+            source venv/bin/activate
             pip install -r requirements.txt
         else
-            echo "requirements.txt not found! Installing defaults..."
-            pip install kafka-python confluent-kafka faker pandas redis pyspark
+            source venv/bin/activate
         fi
-    else
-        source venv/bin/activate
     fi
 }
 
 stop() {
-    info "Cleaning up..."
+    info "Cleaning up processes and containers..."
     [ -f "$PID_PRODUCER" ] && kill $(cat "$PID_PRODUCER") 2>/dev/null && rm "$PID_PRODUCER" || true
     [ -f "$PID_SPARK" ] && kill $(cat "$PID_SPARK") 2>/dev/null && rm "$PID_SPARK" || true
     docker compose down --remove-orphans 2>/dev/null || true
-    # Force clean conflicts
-    docker rm -f zookeeper kafka namenode datanode spark-master spark-worker redis 2>/dev/null || true
 }
 
 start() {
     mkdir -p "$LOG_DIR"
     stop
-    
-    setup_python_env
+    setup_env
 
-    info "Launching Docker..."
+    info "Launching Docker Infrastructure..."
     docker compose up -d
 
-    info "Waiting 45s for services..."
+    info "Waiting 45s for services (Kafka/HDFS/Spark)..."
     sleep 45
 
-    info "Initializing Kafka..."
+    info "Initializing Kafka and HDFS..."
     python3 scripts/init_kafka.py
 
     info "Starting Producer..."
