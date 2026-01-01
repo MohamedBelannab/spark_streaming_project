@@ -49,6 +49,10 @@ stop() {
     [ -f "$PID_PRODUCER" ] && kill $(cat "$PID_PRODUCER") 2>/dev/null && rm "$PID_PRODUCER" || true
     [ -f "$PID_SPARK" ] && kill $(cat "$PID_SPARK") 2>/dev/null && rm "$PID_SPARK" || true
     docker compose down --remove-orphans 2>/dev/null || true
+
+    # Force remove any lingering containers by name
+    docker rm -f hive-metastore-postgresql redis spark-master zookeeper namenode \
+        datanode kafka hive-metastore hive-server spark-worker airflow grafana kafka-ui 2>/dev/null || true
 }
 
 start() {

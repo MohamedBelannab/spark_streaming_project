@@ -10,8 +10,7 @@ pandas
 redis
 
 # Spark (pour les jobs batch)
-pyspark
-
+pyspark==3.5.1
 
 # Airflow (si vous voulez exécuter des DAGs localement)
 apache-airflow
