@@ -33,7 +33,13 @@ setup_env() {
             source venv/bin/activate
             pip install -r requirements.txt
         else
-            source venv/bin/activate
+            source venv/bin/activate || {
+                error "Failed to activate venv. Recreating..."
+                rm -rf venv
+                python3 -m venv venv
+                source venv/bin/activate
+                pip install -r requirements.txt
+            }
         fi
     fi
 }
@@ -60,8 +66,11 @@ start() {
     python3 scripts/init_kafka.py
 
     info "Starting Producer..."
-    nohup python3 scripts/producer.py < /dev/null > "$LOG_DIR/producer.log" 2>&1 &
+    nohup python3 -u scripts/producer.py --no-interactive < /dev/null > "$LOG_DIR/producer.log" 2>&1 &
     echo $! > "$PID_PRODUCER"
+
+    info "Installing Python dependencies in Spark container..."
+    docker exec spark-master pip install redis 2>/dev/null || docker exec spark-master pip3 install redis 2>/dev/null || true
 
     info "Submitting Spark Job..."
     nohup docker exec spark-master /spark/bin/spark-submit \
