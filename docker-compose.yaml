@@ -141,6 +141,16 @@ services:
     networks:
       - data-network
 
+  redis-ui:
+    image: redis/redisinsight:latest
+    container_name: redis-ui
+    depends_on:
+      - redis
+    ports:
+      - "5540:5540"
+    networks:
+      - data-network
+
   grafana:
     image: grafana/grafana:latest
     container_name: grafana
