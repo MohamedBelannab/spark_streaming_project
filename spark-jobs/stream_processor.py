@@ -56,140 +56,71 @@ def get_clickstream_schema():
     ])
 
 def write_to_redis(batch_df, batch_id):
-    """Écrire les métriques temps réel dans Redis - Python 3.5 compatible"""
+    """Écrire les métriques temps réel dans Redis - Version simplifiée"""
     try:
+        # Vérifier si le batch est vide
+        if batch_df.count() == 0:
+            print("⚠️ Batch {} vide, ignoré".format(batch_id))
+            return
+
         r = redis.Redis(
-            host=REDIS_HOST, 
-            port=REDIS_PORT, 
-            decode_responses=True, 
-            socket_connect_timeout=5,
-            socket_keepalive=True
+            host=REDIS_HOST,
+            port=REDIS_PORT,
+            decode_responses=True,
+            socket_connect_timeout=5
         )
-        
+
         batch_time = datetime.now().strftime("%Y%m%d%H%M%S")
 
-        # Collecter toutes les donnees UNE SEULE FOIS pour eviter les erreurs
+        # Collecter les données
         all_rows = batch_df.collect()
 
-        # 1. Statistiques par page (aggreger les donnees deja agregees par fenetre)
-        page_data = {}
+        if not all_rows:
+            print("⚠️ Batch {} sans données".format(batch_id))
+            return
+
+        # Métriques simples
+        total_events = 0
+        total_revenue = 0.0
+
         for row in all_rows:
-            page = row['page']
-            if page not in page_data:
-                page_data[page] = {
-                    'views': 0,
-                    'unique_users': 0,
-                    'avg_duration': [],
-                    'purchases': 0,
-                    'revenue': 0
-                }
-            page_data[page]['views'] += int(row['event_count'] or 0)
-            page_data[page]['unique_users'] += int(row['unique_users'] or 0)
-            page_data[page]['avg_duration'].append(float(row['avg_duration'] or 0))
-            page_data[page]['revenue'] += float(row['revenue'] or 0)
+            try:
+                event_count = int(row['event_count'] or 0)
+                revenue = float(row['revenue'] or 0)
+                page = str(row['page']) if row['page'] else 'unknown'
+                action = str(row['action']) if row['action'] else 'unknown'
+                location = str(row['location']) if row['location'] else 'unknown'
+                device = str(row['device_type']) if row['device_type'] else 'unknown'
 
-        page_stats = []
-        for page, stats in page_data.items():
-            avg_dur = sum(stats['avg_duration']) / len(stats['avg_duration']) if stats['avg_duration'] else 0
-            page_stats.append({
-                'page': page,
-                'views': stats['views'],
-                'unique_users': stats['unique_users'],
-                'avg_duration': avg_dur,
-                'purchases': 0,  # Non disponible dans les donnees agregees
-                'revenue': stats['revenue']
-            })
-        
-        for row in page_stats:
-            page_key = "page:stats:{}".format(row['page'])
-            r.hset(page_key, mapping={
-                "views": int(row['views'] or 0),
-                "unique_users": int(row['unique_users'] or 0),
-                "avg_duration": float(row['avg_duration'] or 0),
-                "purchases": int(row['purchases'] or 0),
-                "revenue": float(row['revenue'] or 0),
-                "last_updated": batch_time
-            })
-            r.expire(page_key, 7200)  # 2 heures
-        
-        # 2. Top pages (leaderboard)
-        for row in page_stats:
-            r.zincrby("leaderboard:pages:views", row['views'] or 0, row['page'])
-            r.zincrby("leaderboard:pages:revenue", row['revenue'] or 0, row['page'])
+                total_events += event_count
+                total_revenue += revenue
 
-        # 3. Statistiques globales (utiliser unique_users agrege au lieu de user_id)
-        total_unique_users = sum([int(row['unique_users'] or 0) for row in page_stats])
-        r.set("global:unique_users:current", total_unique_users)
-        r.expire("global:unique_users:current", 300)  # 5 minutes
-        
-        # 4. Statistiques par action (depuis les donnees deja agregees)
-        action_stats = {}
-        for row in all_rows:
-            action = row['action']
-            if action not in action_stats:
-                action_stats[action] = 0
-            action_stats[action] += int(row['event_count'] or 0)
+                # Stats par page
+                r.hincrby("page:{}".format(page), "views", event_count)
+                r.hincrbyfloat("page:{}".format(page), "revenue", revenue)
 
-        for action, count in action_stats.items():
-            action_key = "action:stats:{}".format(action)
-            r.hincrby(action_key, "count", count)
-            r.expire(action_key, 3600)
-        
-        # 5. Derniers événements (pour monitoring) - utiliser colonnes disponibles
-        try:
-            recent_events = all_rows[:10]  # Utiliser les données déjà collectées
-        except:
-            recent_events = []
-        
-        for event in recent_events:
-            event_data = {
-                "page": event['page'],
-                "action": event['action'],
-                "window": str(event['window']),
-                "event_count": int(event['event_count'] or 0),
-                "revenue": float(event['revenue'] or 0)
-            }
-            r.lpush("recent:events", json.dumps(event_data))
-        
-        r.ltrim("recent:events", 0, 99)  # Garder 100 derniers
-        
-        # 6. Métriques globales
-        total_events = len(all_rows)
-        total_revenue = sum([float(row['revenue'] or 0) for row in all_rows])
-        
+                # Stats par action
+                r.hincrby("action:{}".format(action), "count", event_count)
+
+                # Stats géo
+                r.zincrby("geo:activity", event_count, location)
+
+                # Stats device
+                r.zincrby("device:usage", event_count, device)
+
+            except Exception as row_error:
+                continue
+
+        # Métriques globales
         r.incrby("global:events:total", total_events)
-        r.incrbyfloat("global:revenue:total", float(total_revenue))
+        r.incrbyfloat("global:revenue:total", total_revenue)
         r.set("global:last_batch_time", batch_time)
-        r.set("global:last_batch_id", batch_id)
-        
-        # 7. Statistiques géographiques (depuis les donnees deja agregees)
-        geo_stats = {}
-        for row in all_rows:
-            location = row['location']
-            if location:
-                if location not in geo_stats:
-                    geo_stats[location] = 0
-                geo_stats[location] += int(row['event_count'] or 0)
+        r.set("global:last_batch_id", str(batch_id))
 
-        for location, events in geo_stats.items():
-            r.zincrby("geo:activity", events, location)
-
-        # 8. Statistiques appareils (depuis les donnees deja agregees)
-        device_stats = {}
-        for row in all_rows:
-            device = row['device_type']
-            if device:
-                if device not in device_stats:
-                    device_stats[device] = 0
-                device_stats[device] += int(row['event_count'] or 0)
-
-        for device, events in device_stats.items():
-            r.zincrby("device:usage", events, device)
-        
         print("✅ Batch {} -> Redis: {} events, ${:.2f} revenue".format(batch_id, total_events, total_revenue))
 
     except Exception as e:
-        print("❌ Erreur Redis batch {}: {}".format(batch_id, str(e)[:100]))
+        print("❌ Erreur Redis batch {}: {}".format(batch_id, str(e)[:200]))
 
 def process_real_time_metrics(df):
     """Traiter les métriques en temps réel"""
@@ -291,7 +222,7 @@ def main():
             .withColumn("hour", hour(col("timestamp"))) \
             .withColumn("minute", minute(col("timestamp"))) \
             .withColumn("day_of_week", dayofweek(col("timestamp"))) \
-            .withColumn("is_weekend", when(col("day_of_week").isin(1, 7), 1).otherwise(0)) \
+            .withColumn("is_weekend", when((col("day_of_week") == 1) | (col("day_of_week") == 7), 1).otherwise(0)) \
             .withWatermark("timestamp", "10 minutes")
         
         # 5. Traiter les métriques en temps réel
