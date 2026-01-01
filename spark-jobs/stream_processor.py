@@ -290,7 +290,7 @@ def main():
             .withColumn("hour", hour(col("timestamp"))) \
             .withColumn("minute", minute(col("timestamp"))) \
             .withColumn("day_of_week", dayofweek(col("timestamp"))) \
-            .withColumn("is_weekend", when(col("day_of_week").isin([1, 7]), 1).otherwise(0)) \
+            .withColumn("is_weekend", when(col("day_of_week").isin(1, 7), 1).otherwise(0)) \
             .withWatermark("timestamp", "10 minutes")
         
         # 5. Traiter les métriques en temps réel
