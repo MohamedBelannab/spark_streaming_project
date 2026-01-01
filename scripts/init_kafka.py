@@ -108,6 +108,10 @@ def main():
     print("   - Kafka UI: http://localhost:8080")
     print("   - Airflow: http://localhost:8085")
     print("   - Spark UI: http://localhost:8081")
+    print("   - Hadoop UI: http://localhost:9870")
+    print("   - Redis UI: http://localhost:5540")
+
+
 
 if __name__ == "__main__":
     main()

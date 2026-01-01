@@ -52,7 +52,7 @@ stop() {
 
     # Force remove any lingering containers by name
     docker rm -f hive-metastore-postgresql redis spark-master zookeeper namenode \
-        datanode kafka hive-metastore hive-server spark-worker airflow grafana kafka-ui 2>/dev/null || true
+        datanode redis-ui kafka hive-metastore hive-server spark-worker airflow grafana kafka-ui 2>/dev/null || true
 }
 
 start() {
