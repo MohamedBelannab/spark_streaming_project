@@ -228,10 +228,10 @@ def main():
             from_json(col("value").cast("string"), schema).alias("data")
         ).select("data.*")
         
-        # 3. Convertir timestamp string to timestamp
+        # 3. Convertir timestamp string to timestamp (format ISO 8601 avec T et microsecondes)
         parsed_df = parsed_df.withColumn(
-            "timestamp", 
-            to_timestamp(col("timestamp"), "yyyy-MM-dd HH:mm:ss")
+            "timestamp",
+            to_timestamp(col("timestamp"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSS")
         )
         
         # 4. Ajouter des colonnes de temps
