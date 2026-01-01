@@ -81,7 +81,7 @@ def create_clickstream_event():
     
     event = {
         "user_id": user_id,
-        "timestamp": current_time.isoformat(),
+        "timestamp": current_time.strftime("%Y-%m-%d %H:%M:%S"),
         "page": page,
         "action": action,
         "product_id": product_id,

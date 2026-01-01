@@ -63,7 +63,8 @@ def init_hdfs():
         ["docker", "exec", "namenode", "hdfs", "dfs", "-mkdir", "-p", "/clickstream/aggregations"],
         ["docker", "exec", "namenode", "hdfs", "dfs", "-mkdir", "-p", "/clickstream/sessions"],
         ["docker", "exec", "namenode", "hdfs", "dfs", "-mkdir", "-p", "/clickstream/reports"],
-        
+        ["docker", "exec", "namenode", "hdfs", "dfs", "-mkdir", "-p", "/clickstream/checkpoints"],
+
         # Vérifier les permissions
         ["docker", "exec", "namenode", "hdfs", "dfs", "-chmod", "-R", "777", "/clickstream"]
     ]

@@ -19,7 +19,7 @@ TOPIC_NAME = "clickstream"
 REDIS_HOST = "redis"
 REDIS_PORT = 6379
 HDFS_PATH = "hdfs://namenode:9000/clickstream"
-CHECKPOINT_PATH = "/tmp/spark-checkpoints"
+CHECKPOINT_PATH = "hdfs://namenode:9000/clickstream/checkpoints"
 
 def init_spark_session():
     """Initialiser la session Spark"""
@@ -188,7 +188,25 @@ def main():
     print("🗄️  HDFS: {}".format(HDFS_PATH))
     print("⚡ Redis: {}:{}".format(REDIS_HOST, REDIS_PORT))
     print("=" * 60)
-    
+
+    # Vérifier la connexion Redis avant de démarrer
+    print("🔍 Vérification de la connexion Redis...")
+    try:
+        r = redis.Redis(
+            host=REDIS_HOST,
+            port=REDIS_PORT,
+            decode_responses=True,
+            socket_connect_timeout=10
+        )
+        r.ping()
+        print("✅ Redis connecté et opérationnel")
+    except Exception as e:
+        print("❌ ERREUR: Redis non disponible - {}".format(str(e)))
+        print("⚠️  Les métriques temps réel ne seront pas disponibles")
+        print("💡 Vérifiez que le conteneur Redis est démarré")
+        import sys
+        sys.exit(1)
+
     # Initialiser Spark
     spark = init_spark_session()
     spark.sparkContext.setLogLevel("INFO")
