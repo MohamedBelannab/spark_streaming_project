@@ -138,7 +138,7 @@ def write_to_redis(batch_df, batch_id):
         # 5. Derniers événements (pour monitoring) - utiliser colonnes disponibles
         recent_events = batch_df.select(
             "page", "action", "window", "event_count", "revenue"
-        ).orderBy(desc("window")).limit(10).collect()
+        ).orderBy(col("window").desc()).limit(10).collect()
         
         for event in recent_events:
             event_data = {
