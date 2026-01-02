@@ -128,6 +128,8 @@ services:
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
     ports:
       - "8085:8080"
+    volumes:
+      - airflow_data:/root/airflow
     command: standalone
     depends_on:
       - hive-metastore-postgresql
@@ -140,6 +142,8 @@ services:
     container_name: redis
     ports:
       - "6379:6379"
+    volumes:
+      - redis_data:/data
     networks:
       - data-network
 
@@ -158,6 +162,10 @@ services:
     container_name: grafana
     ports:
       - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
     depends_on:
       - redis
     networks:
@@ -184,3 +192,6 @@ volumes:
   namenode_data:
   datanode_data:
   hive_db_data:
+  grafana_data:
+  redis_data:
+  airflow_data:
