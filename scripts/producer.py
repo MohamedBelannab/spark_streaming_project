@@ -52,7 +52,8 @@ def create_clickstream_event():
     """Crée un événement clickstream selon le schéma du dataset"""
     user_id = random.randint(1, 1000)
     session_id = fake.uuid4()
-    current_time = datetime.now() - timedelta(days=random.randint(0, 7))
+    # Utiliser l'heure actuelle pour le streaming temps réel (pas de décalage)
+    current_time = datetime.now()
     
     # Déterminer si c'est un achat
     is_purchase = random.random() < 0.05  # 5% de chance d'achat
@@ -81,7 +82,7 @@ def create_clickstream_event():
     
     event = {
         "user_id": user_id,
-        "timestamp": current_time.strftime("%Y-%m-%d %H:%M:%S"),
+        "timestamp": current_time.isoformat(),  # Format ISO 8601 avec T
         "page": page,
         "action": action,
         "product_id": product_id,

@@ -55,11 +55,11 @@ def get_clickstream_schema():
         StructField("purchase_amount", DoubleType(), True)
     ])
 
-def write_to_redis(batch_df, batch_id):
-    """Écrire les métriques temps réel dans Redis - Version simplifiée"""
+def write_raw_to_redis(batch_df, batch_id):
+    """Écrire les données brutes directement dans Redis - Sans agrégation"""
     try:
-        # Vérifier si le batch est vide
-        if batch_df.count() == 0:
+        row_count = batch_df.count()
+        if row_count == 0:
             print("⚠️ Batch {} vide, ignoré".format(batch_id))
             return
 
@@ -71,42 +71,35 @@ def write_to_redis(batch_df, batch_id):
         )
 
         batch_time = datetime.now().strftime("%Y%m%d%H%M%S")
-
-        # Collecter les données
         all_rows = batch_df.collect()
 
-        if not all_rows:
-            print("⚠️ Batch {} sans données".format(batch_id))
-            return
-
-        # Métriques simples
-        total_events = 0
+        total_events = len(all_rows)
         total_revenue = 0.0
 
         for row in all_rows:
             try:
-                event_count = int(row['event_count'] or 0)
-                revenue = float(row['revenue'] or 0)
                 page = str(row['page']) if row['page'] else 'unknown'
                 action = str(row['action']) if row['action'] else 'unknown'
                 location = str(row['location']) if row['location'] else 'unknown'
                 device = str(row['device_type']) if row['device_type'] else 'unknown'
-
-                total_events += event_count
-                total_revenue += revenue
+                purchase = float(row['purchase_amount']) if row['purchase_amount'] else 0.0
 
                 # Stats par page
-                r.hincrby("page:{}".format(page), "views", event_count)
-                r.hincrbyfloat("page:{}".format(page), "revenue", revenue)
+                r.hincrby("page:{}".format(page), "views", 1)
 
                 # Stats par action
-                r.hincrby("action:{}".format(action), "count", event_count)
+                r.hincrby("action:{}".format(action), "count", 1)
 
                 # Stats géo
-                r.zincrby("geo:activity", event_count, location)
+                r.zincrby("geo:activity", 1, location)
 
                 # Stats device
-                r.zincrby("device:usage", event_count, device)
+                r.zincrby("device:usage", 1, device)
+
+                # Revenue si achat
+                if action == "purchase" and purchase > 0:
+                    r.hincrbyfloat("page:{}".format(page), "revenue", purchase)
+                    total_revenue += purchase
 
             except Exception as row_error:
                 continue
@@ -125,8 +118,9 @@ def write_to_redis(batch_df, batch_id):
 def process_real_time_metrics(df):
     """Traiter les métriques en temps réel"""
     # Métriques en temps réel - utiliser approx_count_distinct pour les streams
+    # Watermark de 7 jours pour accepter les données avec timestamps décalés
     realtime_metrics = df \
-        .withWatermark("timestamp", "1 minute") \
+        .withWatermark("timestamp", "7 days") \
         .groupBy(
             window(col("timestamp"), "5 minutes", "1 minute"),
             col("page"),
@@ -241,23 +235,20 @@ def main():
             .withColumn("minute", minute(col("timestamp"))) \
             .withColumn("day_of_week", dayofweek(col("timestamp"))) \
             .withColumn("is_weekend", when((col("day_of_week") == 1) | (col("day_of_week") == 7), 1).otherwise(0)) \
-            .withWatermark("timestamp", "10 minutes")
+            .withWatermark("timestamp", "7 days")
         
         # 5. Traiter les métriques en temps réel
         print("📊 Traitement des métriques en temps réel...")
         realtime_metrics = process_real_time_metrics(enriched_df)
         
-        # 6. Stream 1: Écrire les métriques temps réel dans Redis
+        # 6. Stream 1: Écrire les données brutes dans Redis (sans watermark pour avoir des données immédiates)
         print("⚡ Démarrage du stream Redis...")
-        redis_stream = realtime_metrics \
-            .select("window", "page", "action", "location", "device_type",
-                    "event_count", "unique_users", "revenue",
-                    "avg_duration", "revenue_per_user", "conversion_rate") \
+        redis_stream = parsed_df \
             .writeStream \
-            .foreachBatch(write_to_redis) \
-            .outputMode("update") \
-            .trigger(processingTime="1 minute") \
-            .option("checkpointLocation", "{}/redis".format(CHECKPOINT_PATH)) \
+            .foreachBatch(write_raw_to_redis) \
+            .outputMode("append") \
+            .trigger(processingTime="30 seconds") \
+            .option("checkpointLocation", "{}/redis_raw".format(CHECKPOINT_PATH)) \
             .start()
 
         # 7. Stream 2: Écrire les données brutes dans HDFS
@@ -275,7 +266,7 @@ def main():
         # 8. Stream 3: Agrégations horaires (append mode)
         print("📊 Démarrage du stream HDFS (aggregations)...")
         daily_aggregations = enriched_df \
-            .withWatermark("timestamp", "10 minutes") \
+            .withWatermark("timestamp", "7 days") \
             .groupBy(
                 window(col("timestamp"), "1 hour"),
                 col("date"),
